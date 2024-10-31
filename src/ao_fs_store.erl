@@ -111,5 +111,5 @@ join([]) -> [];
 join(Path) when is_binary(Path) -> Path;
 join([""|Xs]) -> join(Xs);
 join(FN = [X|_Xs]) when is_integer(X) -> FN;
-join([X|Xs]) -> 
+join([X|Xs]) ->
     filename:join(join(X), join(Xs)).

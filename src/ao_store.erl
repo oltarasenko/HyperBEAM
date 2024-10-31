@@ -4,7 +4,7 @@
 -export([type/2, read/2, write/3, list/2]).
 -export([path/2, add_path/3]).
 -export([make_group/2, make_link/3, resolve/2]).
-
+-include_lib("eunit/include/eunit.hrl").
 %%% A simple abstraction layer for AO key value store operations.
 %%% This interface allows us to swap out the underlying store
 %%% implementation(s) later, or even at the configuration level if desired.
@@ -14,9 +14,20 @@
 
 behavior_info(callbacks) ->
     [
-        {start, 1}, {stop, 1}, {reset, 1}, {make_group, 2}, {make_link, 3},
-        {type, 2}, {read, 2}, {write, 3},
-        {list, 2}, {path, 2}, {add_path, 3}
+        {start, 1}, % starts. 0 usages
+        {stop, 1}, % stops. 0 usages
+        {reset, 1}, % removes the data. 1 usage
+
+        {make_group, 2}, % just does ensure_dir
+        {make_link, 3}, % creates a simlink
+        {type, 2}, % can be composite(I guess nested keys) //simple//notfound
+
+        {read, 2}, % read or error/not_found
+        {write, 3}, % write file with value
+
+        {list, 2}, % list all files in dir???
+        {path, 2}, % just outputs path??
+        {add_path, 3} % just joins two path togegher
     ].
 
 %%% Library wrapper implementations.
@@ -37,7 +48,8 @@ reset(Modules) -> call_function(Modules, reset, []).
 
 type(Modules, Path) -> call_function(Modules, type, [Path]).
 
-path(Modules, Path) -> call_function(Modules, path, [Path]).
+path(Modules, Path) ->
+    call_function(Modules, path, [Path]).
 
 add_path(Modules, Path1, Path2) -> call_function(Modules, add_path, [Path1, Path2]).
 
@@ -49,15 +61,19 @@ list(Modules, Path) -> call_function(Modules, list, [Path]).
 call_function(X, _Function, _Args) when not is_list(X) ->
     call_function([X], _Function, _Args);
 call_function([], _Function, _Args) ->
+    ?debugMsg("Not found!!!"),
     not_found;
 call_function([{Mod, Opts} | Rest], Function, Args) ->
     try apply(Mod, Function, [Opts | Args]) of
         not_found ->
+
             call_function(Rest, Function, Args);
         Result ->
             Result
     catch
-        _:_ ->
+        Class:Reason:StackTrace ->
+
+            ?debugFmt("Crash: ~p||~p||~p", [Class, Reason, StackTrace]),
             call_function(Rest, Function, Args)
     end.
 

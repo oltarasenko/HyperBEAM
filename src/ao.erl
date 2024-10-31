@@ -26,7 +26,7 @@ config() ->
         %% Scheduling mode: Determines when the SU should inform the recipient
         %% that an assignment has been scheduled for a message.
         %% Options: aggressive(!), local_confirmation, remote_confirmation
-        scheduling_mode => aggressive, 
+        scheduling_mode => aggressive,
         http_port => 8734,
         http_host => "localhost",
         gateway => "https://arweave.net",
@@ -80,6 +80,7 @@ config() ->
             ],
         local_store => [{ao_fs_store, #{ dir => "TEST-data" }}],
         mode => debug,
+
         debug_print => false
     }.
 
@@ -102,7 +103,7 @@ c(X, ModStr, undefined) -> c(X, ModStr, "");
 c(X, ModAtom, Line) when is_atom(ModAtom) ->
     case lists:member({ao_debug, [print]}, ModAtom:module_info(attributes)) of
         true -> debug_print(X, atom_to_list(ModAtom), Line);
-        false -> 
+        false ->
             case lists:member({ao_debug, [no_print]}, ModAtom:module_info(attributes)) of
                 false -> c(X, atom_to_list(ModAtom), Line);
                 true -> X
