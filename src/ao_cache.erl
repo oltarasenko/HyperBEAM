@@ -273,7 +273,8 @@ read_output(Store, ProcID, Input) ->
 			?debugFmt("[error] [read_output] Read output got type: ~p", [
 				{not_found, ao_store:type(Store, ["messages", ResolvedPath])}
 			]),
-			?c(not_found);
+			?c(not_found),
+			not_found;
 		Type ->
 			?debugFmt("[error] [read_output] Read output got type: ~p", [Type]),
 			read(Store, ResolvedPath)
@@ -314,14 +315,17 @@ lookup(Store, ID, Subpath, DirBase) ->
 	?debugFmt("ResolvedPath: ~p\n\n\n", [ResolvedPath]),
 	read(Store, ResolvedPath, DirBase, DirBase).
 
+-include_lib("eunit/include/eunit.hrl").
 read(Store, ID) ->
+	?debugMsg("Calling read"),
 	read(Store, ID, "messages").
 read(Store, ID, DirBase) ->
 	read(Store, ID, DirBase, all).
 read(Store, ID, DirBase, Subpath) ->
 	?c({reading_message, ID, DirBase, Subpath}),
+	?debugFmt("!!!Base dir, Subpath: basedir(~p) and subpath(~p)", [DirBase, Subpath]),
 	MessagePath = ao_store:path(Store, [DirBase, fmt_id(ID)]),
-	?debugFmt("Base dir, Subpath: basedir(~p) and subpath(~p)", [DirBase, Subpath]),
+	?debugFmt("Msg path: ~p", [MessagePath]),
 	?debugFmt("[read] identifies type via call to ao_store: ~p<|>~p", [MessagePath, ao_store:type(Store, MessagePath)]),
 	case ao_store:type(Store, MessagePath) of
 		composite ->
@@ -425,12 +429,18 @@ resursive_path_resolution_test() ->
 	?assertEqual({ok, <<"test-data">>}, ao_store:read(TestStore, "test-link2")).
 
 % For now it's broken in rocksdb_store, as it supposed to write a file under a subfolder
-% hierarchical_path_resolution_test() ->
-%     TestStore = test_cache(),
-%     ao_store:make_group(TestStore, "test-dir1"),
-%     ao_store:write(TestStore, ["test-dir1", "test-file"], <<"test-data">>),
-%     ao_store:make_link(TestStore, ["test-dir1"], "test-link"),
-%     ?assertEqual({ok, <<"test-data">>}, ao_store:read(TestStore, ["test-link", "test-file"])).
+hierarchical_path_resolution_test() ->
+	TestStore = test_cache(),
+	ao_store:make_group(TestStore, "test-dir1"),
+	ao_store:write(TestStore, ["test-dir1", "test-file"], <<"test-data">>),
+	ao_store:make_link(TestStore, ["test-dir1"], "test-link"),
+	% [
+	% 	{<<"test-dir1">>,<<"group">>},
+	%  	{<<"test-dir1/test-file">>,<<"raw">>},
+	%     {<<"test-link">>,<<"link">>}
+	% ] --> read(test-link, test-file)
+	?debugFmt("List all items: ~p\n", [ao_store:list(TestStore, <<"Path">>)]),
+	?assertEqual({ok, <<"test-data">>}, ao_store:read(TestStore, ["test-link", "test-file"])).
 
 %% Test storing and retrieving a simple unsigned item
 store_simple_unsigned_item_test() ->

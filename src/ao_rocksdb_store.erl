@@ -26,7 +26,6 @@
 
 -define(TIMEOUT, 5000).
 
--include("src/include/ao.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 % Behaviour based callbacks
@@ -76,11 +75,17 @@ reset(_Opts) ->
 	Opts :: map(),
 	Key :: key() | list(),
 	Result :: {ok, value()} | not_found | {error, {corruption, string()}} | {error, any()}.
-read(_Opts, RawKey) ->
-	?debugFmt("Raw Key ~p", [RawKey]),
-	Key = ao_fs_store:join(RawKey),
-	KeyBin = maybe_convert_to_binary(Key),
-	gen_server:call(?MODULE, {read, KeyBin}, ?TIMEOUT).
+read(Opts, RawKey) ->
+	Key = join(RawKey),
+	case meta(Key) of
+		not_found ->
+			case resolve(Opts, Key) of
+				not_found -> not_found;
+				ResolvedPath -> gen_server:call(?MODULE, {read, join(ResolvedPath)}, ?TIMEOUT)
+			end;
+		_Result ->
+			gen_server:call(?MODULE, {read, Key}, ?TIMEOUT)
+	end.
 
 %%------------------------------------------------------------------------------
 %% @doc Write given Key and Value to the database
@@ -93,11 +98,7 @@ read(_Opts, RawKey) ->
 	Value :: value() | list(),
 	Result :: ok | {error, any()}.
 write(_Opts, RawKey, Value) ->
-	% KeyBin = maybe_convert_to_binary(Key),
-	% ValueBin = maybe_convert_to_binary(Value),
-	KeyList = ao_fs_store:join(RawKey),
-	Key = erlang:list_to_binary(KeyList),
-
+	Key = join(RawKey),
 	gen_server:call(?MODULE, {write, Key, Value}, ?TIMEOUT).
 
 meta(Key) ->
@@ -139,28 +140,32 @@ list(_Opts, _Path) ->
 	Path :: binary() | list(),
 	Result :: not_found | binary() | [binary() | list()].
 resolve(_Opts, RawKey) ->
-	% [info] rocksdb resolve:
-	% ["messages", "DayHZCGjNqcgvif35pg2kg84GLjIEEln8rG5JZUXK1E", ["level1_key","level2_key","level3_key"]]
-	% ResolvedPath: ok
+	?debugFmt("Trying to resolve ~p", [RawKey]),
 	Key = ao_fs_store:join(RawKey),
-	?debugFmt("[info] rocksdb resolve: ~p", [filename:split(Key)]),
 	Path = filename:split(Key),
-	[First, Second | Rest] = Path,
-	ResultBin = myresolve(ao_fs_store:join([First, Second]), Rest),
-	?debugFmt("[info] rockdb resolve result: ~p\n\n\n\n", [ResultBin]),
-	Result = binary_to_list(ResultBin),
-	Result.
+
+	case myresolve("", Path) of
+		not_found -> not_found;
+		% converting back to list, so ao_cache can remove common
+		BinResult -> binary_to_list(BinResult)
+	end.
 
 myresolve(CurrPath, []) ->
 	CurrPath;
+myresolve(CurrPath, ["messages", Key | Rest]) ->
+	myresolve(ao_fs_store:join([CurrPath, "messages", Key]), Rest);
+myresolve(CurrPath, ["computed", Key | Rest]) ->
+	myresolve(ao_fs_store:join([CurrPath, "computed", Key]), Rest);
 myresolve(CurrPath, [LookupKey | Rest]) ->
-	?debugFmt("myresolve: Join For: ~p and ~p\n", [CurrPath, LookupKey]),
 	LookupPath = ao_fs_store:join([CurrPath, LookupKey]),
-	?debugFmt("New lookup path: ~p\n", [{LookupPath, meta(LookupPath)}]),
 	NewCurrentPath =
 		case meta(LookupPath) of
-			{ok, <<"link">>} -> item_path(LookupPath);
-			Other -> ?debugFmt("[error] [info] [error] This gave me other: ~p", [Other])
+			{ok, <<"link">>} ->
+				item_path(LookupPath);
+			{ok, <<"raw">>} ->
+				{ok, LookupPath};
+			_Other ->
+				not_found
 		end,
 	case NewCurrentPath of
 		not_found -> not_found;
@@ -168,30 +173,25 @@ myresolve(CurrPath, [LookupKey | Rest]) ->
 	end.
 
 item_path(Key) ->
+	% Maybe I don't need it, as it just does get no follow
 	gen_server:call(?MODULE, {item_path, join(Key)}, ?TIMEOUT).
 
 -spec type(Opts, Key) -> Result when
 	Opts :: map(),
 	Key :: binary(),
 	Result :: composite | simple | not_found.
-% type(Opts, ["messages", Path]) ->
-% 	?debugMsg("Swallow term messages"),
-% 	type(Opts, Path);
-%     % MessagesPath = <<"messages-", Path/binary>>,
-% 	% ?debugFmt("[type] Type here: ~p", [MessagesPath]),
-%     % type(Opts, MessagesPath);
-type(Opts, RawKey) ->
-	Key1 = ao_fs_store:join(RawKey),
-	Key = maybe_convert_to_binary(Key1),
+
+type(_Opts, not_found) ->
+	not_found;
+type(_Opts, RawKey) ->
+	Key = join(RawKey),
+	% TODO: Rewrite doc!
 	% The fs adapter looks on the FS. If it's a directory it says 'comosite'
 	% composite item is an item which has manifest!
 	?debugFmt("[type] Identifying the type by key: ~p --> ~p", [Key, meta(Key)]),
 	case meta(Key) of
 		not_found ->
-			case contains(Key, <<"-item$">>) of
-				true -> not_found;
-				false -> type(Opts, <<Key/binary, "-item">>)
-			end;
+			not_found;
 		{ok, <<"composite">>} ->
 			composite;
 		{ok, <<"group">>} ->
@@ -203,7 +203,7 @@ type(Opts, RawKey) ->
 	end.
 
 %%------------------------------------------------------------------------------
-%% @doc Ignored for rockdb storage
+%% @doc TODO WRite doc
 %% @end
 %%------------------------------------------------------------------------------
 make_group(_Opts, Path) ->
@@ -214,10 +214,8 @@ make_group(_Opts, Path) ->
 make_link(_, Key1, Key1) ->
 	ok;
 make_link(Opts, Key1, Key2) when is_list(Key1), is_list(Key2) ->
-	?debugFmt("Making link: ~p ~p", [Key1, Key2]),
 	Key1Bin = join(Key1),
 	Key2Bin = join(Key2),
-	?debugFmt("Making link: ~p --> ~p ~p", [{Key1, Key2}, Key1Bin, Key2Bin]),
 	make_link(Opts, Key1Bin, Key2Bin);
 make_link(_Opts, Key1, Key2) ->
 	gen_server:call(?MODULE, {make_link, Key1, Key2}, ?TIMEOUT).
@@ -248,12 +246,8 @@ handle_info(_Info, State) ->
 	{noreply, State}.
 
 handle_call({write, Key, Value}, _From, State) ->
-	case contains(Key, <<"-item$">>) of
-		false ->
-			ok = write_meta(State, Key, <<"raw">>, #{});
-		true ->
-			ok = write_meta(State, Key, <<"composite">>, #{})
-	end,
+	?debugFmt("[info][info] Writing the key ~p [info][info]", [Key]),
+	ok = write_meta(State, Key, <<"raw">>, #{}),
 	Result = write_data(State, Key, Value, #{}),
 	{reply, Result, State};
 handle_call({make_group, Key}, _From, State) ->
@@ -266,13 +260,7 @@ handle_call({make_link, Key1, Key2}, _From, State) ->
 
 	{reply, Result, State};
 handle_call({read, Key}, _From, DBInfo) ->
-	Result =
-		case get(DBInfo, Key, [], []) of
-			{ok, Res, _Path} ->
-				{ok, Res};
-			{not_found, _Path} ->
-				not_found
-		end,
+	Result = get(DBInfo, Key, #{}),
 	{reply, Result, DBInfo};
 handle_call({meta, Key}, _From, State) ->
 	Result = get_meta(State, Key, #{}),
@@ -334,53 +322,24 @@ write_data(DBInfo, Key, Value, Opts) ->
 % get(_DBInfo, not_found, _Opts, _Path) ->
 %     not_found;
 -include_lib("eunit/include/eunit.hrl").
-get(DBInfo, Key, Opts, Path) ->
+get(DBInfo, Key, Opts) ->
 	?debugFmt("[priv_get]Get meta: ~p", [{Key, get_meta(DBInfo, Key, Opts)}]),
 	case get_data(DBInfo, Key, Opts) of
 		{ok, Value} ->
 			case get_meta(DBInfo, Key, Opts) of
 				{ok, <<"link">>} ->
-					get(DBInfo, Value, Opts, [Key | Path]);
+					% Automatically follow the link
+					get(DBInfo, Value, Opts);
 				{ok, <<"raw">>} ->
-					{ok, Value, Path};
+					{ok, Value};
 				{ok, <<"group">>} ->
-					get(DBInfo, <<Key/binary, "/item">>, Opts, Path);
+					% extract the group item
+					get(DBInfo, ao_fs_store:join([Key, <<"item">>]), Opts);
 				_OtherMeta ->
-					{ok, Value, Path}
+					{ok, Value}
 			end;
-		% try removing this clause
 		not_found ->
-			?debugFmt("Did not find data trying with: ~p-item", [Key]),
-			case contains(Key, <<"-item$">>) of
-				false ->
-					% Try also to fetch item
-					get(DBInfo, <<Key/binary, "-item">>, Opts, Path);
-				true ->
-					?debugMsg("Already has it, so no really!"),
-					{not_found, Path}
-			end
-	end.
-% not_found ->
-%     % Also try to get complex item if possible
-%     case contains(Key, <<"-item$">>) of
-%         false ->
-%             get(DBHandle, <<Key/binary, "-item">>, Opts, Path);
-%         true ->
-%             not_found
-%     end;
-% {ok, <<"link-", LinkedKey/binary>>} ->
-%     % Try following the link
-%     get(DBHandle, LinkedKey, Opts, [Key | Path]);
-% {ok, Result} ->
-%     {ok, {[Key | Path], Result}}
-% end.
-
-contains(Subject, Pattern) ->
-	case re:run(Subject, Pattern, [{capture, none}, unicode]) of
-		match ->
-			true;
-		nomatch ->
-			false
+			not_found
 	end.
 
 collect(Iterator) ->
@@ -398,11 +357,6 @@ collect(Iterator, Acc) ->
 			% Reached the end of the iterator, return the accumulated list
 			lists:reverse(Acc)
 	end.
-
-maybe_remove_messages_prefix(<<"messages-", Rest/binary>>) ->
-	Rest;
-maybe_remove_messages_prefix(Other) ->
-	Other.
 
 maybe_convert_to_binary(Value) when is_list(Value) ->
 	list_to_binary(Value);
