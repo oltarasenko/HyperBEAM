@@ -4,7 +4,7 @@
 -export([type/2, read/2, write/3, list/2]).
 -export([path/2, add_path/3]).
 -export([make_group/2, make_link/3, resolve/2]).
-
+-include_lib("eunit/include/eunit.hrl").
 %%% A simple abstraction layer for AO key value store operations.
 %%% This interface allows us to swap out the underlying store
 %%% implementation(s) later, or even at the configuration level if desired.
@@ -13,11 +13,19 @@
 %%% {error, no_viable_store}.
 
 behavior_info(callbacks) ->
-    [
-        {start, 1}, {stop, 1}, {reset, 1}, {make_group, 2}, {make_link, 3},
-        {type, 2}, {read, 2}, {write, 3},
-        {list, 2}, {path, 2}, {add_path, 3}
-    ].
+	[
+		{start, 1},
+		{stop, 1},
+		{reset, 1},
+		{make_group, 2},
+		{make_link, 3},
+		{type, 2},
+		{read, 2},
+		{write, 3},
+		{list, 2},
+		{path, 2},
+		{add_path, 3}
+	].
 
 %%% Library wrapper implementations.
 
@@ -47,30 +55,34 @@ list(Modules, Path) -> call_function(Modules, list, [Path]).
 
 %% @doc Call a function on the first module that succeeds.
 call_function(X, _Function, _Args) when not is_list(X) ->
-    call_function([X], _Function, _Args);
+	call_function([X], _Function, _Args);
 call_function([], _Function, _Args) ->
-    not_found;
+	not_found;
 call_function([{Mod, Opts} | Rest], Function, Args) ->
-    try apply(Mod, Function, [Opts | Args]) of
-        not_found ->
-            call_function(Rest, Function, Args);
-        Result ->
-            Result
-    catch
-        _:_ ->
-            call_function(Rest, Function, Args)
-    end.
+	try apply(Mod, Function, [Opts | Args]) of
+		not_found ->
+			logger:error("Not found: ~p", [{Mod, Function, Opts, Args}]),
+			call_function(Rest, Function, Args);
+		Result ->
+			Result
+	catch
+		Error:Reason:Bt ->
+			logger:error("~p", [{Error, Reason, Bt}]),
+			% ?debugFmt("Error: ~p", [{Error, Reason, Bt}]),
+			call_function(Rest, Function, Args)
+	end.
 
 %% @doc Call a function on all given modules.
 call_all(X, _Function, _Args) when not is_list(X) ->
-    call_all([X], _Function, _Args);
+	call_all([X], _Function, _Args);
 call_all([], _Function, _Args) ->
-    ok;
+	ok;
 call_all([{Mod, Opts} | Rest], Function, Args) ->
-    try
-        apply(Mod, Function, [Opts | Args])
-    catch
-        _:_ ->
-            ok
-    end,
-    call_all(Rest, Function, Args).
+	try
+		apply(Mod, Function, [Opts | Args])
+	catch
+		Error:Reason:Bt ->
+			logger:error("~p", [{Error, Reason, Bt}]),
+			ok
+	end,
+	call_all(Rest, Function, Args).
