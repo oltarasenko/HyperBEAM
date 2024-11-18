@@ -338,6 +338,7 @@ do_resolve(CurrPath, []) ->
 do_resolve(CurrPath, ["messages", Key | Rest]) ->
 	do_resolve(ao_fs_store:join([CurrPath, "messages", Key]), Rest);
 do_resolve(CurrPath, ["computed", Key | Rest]) ->
+	?debugFmt("Resolving computed: ~p", [[Key | Rest]]),
 	do_resolve(ao_fs_store:join([CurrPath, "computed", Key]), Rest);
 do_resolve(CurrPath, [LookupKey | Rest]) ->
 	LookupPath = ao_fs_store:join([CurrPath, LookupKey]),
@@ -348,14 +349,15 @@ do_resolve(CurrPath, [LookupKey | Rest]) ->
 				item_path(LookupPath);
 			{ok, <<"raw">>} ->
 				{ok, LookupPath};
-			Other ->
-				?debugFmt("Meta have found some other elem: ~p", [Other]),
-				not_found
+			not_found ->
+				do_resolve(LookupPath, Rest)
 		end,
 	case NewCurrentPath of
 		not_found ->
 			?debugFmt("Current path :~p", [list_to_binary(CurrPath)]),
 			list_to_binary(CurrPath);
+		Result when is_binary(Result) ->
+			Result;
 		{ok, Path} ->
 			do_resolve(Path, Rest)
 	end.

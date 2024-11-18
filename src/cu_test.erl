@@ -30,12 +30,12 @@ simple_stack_test() ->
 % full_push_test_() ->
 %     {timeout, 150, ?_assert(full_push_test())}.
 
-% full_push_test() ->
-%     init(),
-%     ?c(full_push_test_started),
-%     {_, Msg} = generate_test_data(ping_ping_script()),
-%     ao_cache:write(ao:get(store), Msg),
-%     ao_client:push(Msg, none).
+full_push_test() ->
+	init(),
+	?c(full_push_test_started),
+	{_, Msg} = generate_test_data(ping_ping_script()),
+	ao_cache:write(ao:get(store), Msg),
+	ao_client:push(Msg, none).
 
 % simple_load_test() ->
 %     init(),

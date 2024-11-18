@@ -15,7 +15,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(TEST_DIR, "test-cache").
-
+%
 % -define(TEST_STORE, {ao_fs_store, #{ dir => ?TEST_DIR }}).
 -define(TEST_STORE, {ao_rocksdb_store, #{dir => ?TEST_DIR}}).
 
@@ -543,11 +543,13 @@ write_and_read_output_test() ->
 	ok = write_output(Store, Proc#tx.id, 0, Item1),
 	ok = write_output(Store, Proc#tx.id, 1, Item2),
 	?debugMsg("------- write done ---- \n"),
-	?debugFmt("All items: ~p", [ao_store:list(Store, "all")]),
-	% ?assertEqual(Item1, read(Store, Item1#tx.id)),
-	% ?assertEqual(Item2, read(Store, Item2#tx.id)),
-	% ?assertEqual(Item2, read_output(Store, fmt_id(Proc#tx.id), 1)).
-	?assertEqual(Item1, read_output(Store, fmt_id(Proc#tx.id), Item1#tx.id)).
+	?debugFmt("All items: ~p", [ao_store:list(Store, "computed")]),
+	?assertEqual(Item1, read(Store, Item1#tx.id)),
+	?assertEqual(Item2, read(Store, Item2#tx.id)),
+
+	?assertEqual(Item1, read_output(Store, fmt_id(Proc#tx.id), Item1#tx.id)),
+	?debugFmt("Getting final item!!!\n\n", []),
+	?assertEqual(Item2, read_output(Store, fmt_id(Proc#tx.id), 1)).
 
 % latest_output_retrieval_test_broken() ->
 %     Store = test_cache(),
