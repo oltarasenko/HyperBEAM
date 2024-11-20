@@ -22,9 +22,14 @@
 
 % Behaviour based callbacks
 -export([start/1, stop/1]).
+% covered
 -export([read/2, write/3]).
+% List does not list?
 -export([list/2]).
--export([reset/1, make_link/3]).
+% covered
+-export([reset/1]).
+% covered
+-export([make_link/3]).
 -export([make_group/2]).
 -export([type/2]).
 -export([add_path/3, path/2]).
@@ -78,7 +83,7 @@ read(Opts, RawKey) ->
 				not_found ->
 					not_found;
 				ResolvedPath ->
-					?debugFmt("Read auto resolved: ~p", [ResolvedPath]),
+					% ?debugFmt("Read auto resolved: ~p", [ResolvedPath]),
 					gen_server:call(?MODULE, {read, join(ResolvedPath)}, ?TIMEOUT)
 			end;
 		_Result ->
@@ -120,8 +125,8 @@ list(_Opts, _Path) ->
 			Res =
 				case meta(Key) of
 					{ok, <<"link">>} ->
-						% {ok, Value} = read(#{}, Key),
-						<<"link">>;
+						{ok, Value} = read_no_follow(Key),
+						{<<"link">>, Value};
 					{ok, Type} ->
 						Type
 				end,
@@ -131,16 +136,16 @@ list(_Opts, _Path) ->
 	).
 
 %% @doc Replace links in a path with the target of the link.
-%% [<<"computed-q-T3q22d3Ef62yR8hPK07iylm9Ed6tzMxIcvydIAd0M">>,
-% ["slot","1"]]
 -spec resolve(Opts, Path) -> Result when
 	Opts :: any(),
 	Path :: binary() | list(),
 	Result :: not_found | binary() | [binary() | list()].
 resolve(_Opts, RawKey) ->
+	?debugFmt("Path ~p", [RawKey]),
 	Key = ao_fs_store:join(RawKey),
 	Path = filename:split(Key),
 
+	?debugFmt("Resolution result: ~p", [do_resolve("", Path)]),
 	case do_resolve("", Path) of
 		not_found -> not_found;
 		<<"">> -> "";
@@ -148,9 +153,9 @@ resolve(_Opts, RawKey) ->
 		BinResult -> binary_to_list(BinResult)
 	end.
 
-item_path(Key) ->
+read_no_follow(Key) ->
 	% Maybe I don't need it, as it just does get no follow
-	gen_server:call(?MODULE, {item_path, join(Key)}, ?TIMEOUT).
+	gen_server:call(?MODULE, {read_no_follow, join(Key)}, ?TIMEOUT).
 
 -spec type(Opts, Key) -> Result when
 	Opts :: map(),
@@ -164,7 +169,7 @@ type(_Opts, RawKey) ->
 	% TODO: Rewrite doc!
 	% The fs adapter looks on the FS. If it's a directory it says 'comosite'
 	% composite item is an item which has manifest!
-	?debugFmt("[type] Identifying the type by key: ~p --> ~p", [Key, meta(Key)]),
+	% ?debugFmt("[type] Identifying the type by key: ~p --> ~p", [Key, meta(Key)]),
 	case meta(Key) of
 		not_found ->
 			not_found;
@@ -220,7 +225,7 @@ handle_info(_Info, State) ->
 	{noreply, State}.
 
 handle_call({write, Key, Value}, _From, State) ->
-	?debugFmt("[info][info] Writing the key ~p [info][info]", [Key]),
+	% ?debugFmt("[info][info] Writing the key ~p [info][info]", [Key]),
 	ok = write_meta(State, Key, <<"raw">>, #{}),
 	Result = write_data(State, Key, Value, #{}),
 	{reply, Result, State};
@@ -239,7 +244,7 @@ handle_call({read, Key}, _From, DBInfo) ->
 handle_call({meta, Key}, _From, State) ->
 	Result = get_meta(State, Key, #{}),
 	{reply, Result, State};
-handle_call({item_path, BaseKey}, _From, State) ->
+handle_call({read_no_follow, BaseKey}, _From, State) ->
 	Result = get_data(State, BaseKey, #{}),
 	{reply, Result, State};
 handle_call(reset, _From, #{db_handle := DBHandle, dir := Dir}) ->
@@ -283,14 +288,11 @@ get_meta(#{meta_family := F, db_handle := Handle}, Key, Opts) ->
 	rocksdb:get(Handle, F, Key, Opts).
 
 write_meta(DBInfo, Key, Value, Opts) ->
-	?debugFmt("writing meta: ~p", [{Key, Value}]),
 	#{meta_family := ColumnFamily, db_handle := Handle} = DBInfo,
 	rocksdb:put(Handle, ColumnFamily, Key, Value, Opts).
 
 write_data(DBInfo, Key, Value, Opts) ->
-	?debugFmt("writing data: ~p", [Key]),
 	#{data_family := ColumnFamily, db_handle := Handle} = DBInfo,
-	% ?debugFmt("String data: ~p: ~p", [Key, Value]),
 	rocksdb:put(Handle, ColumnFamily, Key, Value, Opts).
 
 get(DBInfo, Key, Opts) ->
@@ -335,31 +337,34 @@ maybe_convert_to_binary(Value) when is_binary(Value) ->
 
 do_resolve(CurrPath, []) ->
 	CurrPath;
-do_resolve(CurrPath, ["messages", Key | Rest]) ->
-	do_resolve(ao_fs_store:join([CurrPath, "messages", Key]), Rest);
-do_resolve(CurrPath, ["computed", Key | Rest]) ->
-	?debugFmt("Resolving computed: ~p", [[Key | Rest]]),
-	do_resolve(ao_fs_store:join([CurrPath, "computed", Key]), Rest);
+% do_resolve(CurrPath, ["messages", Key | Rest]) ->
+% 	?debugFmt("~p", [list(#{}, <<"">>)]),
+% 	do_resolve(ao_fs_store:join([CurrPath, "messages", Key]), Rest);
+% do_resolve(CurrPath, ["computed", Key | Rest]) ->
+% 	?debugFmt("Trying to resolve: ~p", [{CurrPath, "computed", Key, Rest}]),
+% 	?debugFmt("~p", [list(#{}, <<"">>)]),
+% 	do_resolve(ao_fs_store:join([CurrPath, "computed", Key]), Rest);
 do_resolve(CurrPath, [LookupKey | Rest]) ->
 	LookupPath = ao_fs_store:join([CurrPath, LookupKey]),
-	?debugFmt("Lookup on ~p", [LookupPath]),
+	?debugFmt("Current lookup path: ~p", [LookupPath]),
 	NewCurrentPath =
 		case meta(LookupPath) of
 			{ok, <<"link">>} ->
-				item_path(LookupPath);
+				read_no_follow(LookupPath);
 			{ok, <<"raw">>} ->
 				{ok, LookupPath};
+			{ok, <<"group">>} ->
+				do_resolve(LookupPath, Rest);
 			not_found ->
 				do_resolve(LookupPath, Rest)
 		end,
 	case NewCurrentPath of
 		not_found ->
-			?debugFmt("Current path :~p", [list_to_binary(CurrPath)]),
 			list_to_binary(CurrPath);
-		Result when is_binary(Result) ->
-			Result;
 		{ok, Path} ->
-			do_resolve(Path, Rest)
+			do_resolve(Path, Rest);
+		Result ->
+			maybe_convert_to_binary(Result)
 	end.
 %%%=============================================================================
 %%% Tests
@@ -418,6 +423,8 @@ join(Key) when is_binary(Key) -> Key.
 %             end}
 %         ]}.
 
+-define(DEFAULT_VALUE, <<"Default">>).
+
 api_test_() ->
 	{foreach,
 		fun() ->
@@ -425,33 +432,202 @@ api_test_() ->
 			unlink(Pid)
 		end,
 		fun(_) -> reset([]) end, [
-			{"make_link/3 creates a link to actual data", fun() ->
-				ok = write(ignored_options, <<"key1">>, <<"test_value">>),
-				ok = make_link([], <<"key1">>, <<"key2">>),
-				{ok, Value} = read([], <<"key2">>),
+			% {"make_link/3 creates a link to actual data", fun() ->
+			% 	ok = write(ignored_options, <<"key1">>, <<"test_value">>),
+			% 	ok = make_link([], <<"key1">>, <<"key2">>),
+			% 	{ok, Value} = read([], <<"key2">>),
 
-				?assertEqual(<<"test_value">>, Value)
-			end},
-			{"make_link/3 does not create links if keys are same", fun() ->
-				ok = make_link([], <<"key1">>, <<"key1">>),
-				?assertEqual(not_found, read(#{}, <<"key1">>))
-			end},
-			{"reset cleans up the database", fun() ->
-				ok = write(ignored_options, <<"test_key">>, <<"test_value">>),
+			% 	?assertEqual(<<"test_value">>, Value)
+			% end},
+			% {"make_group/2 creates a group", fun() ->
+			% 	ok = make_group(#{}, <<"folder_path">>),
 
-				ok = reset([]),
-				?assertEqual(not_found, read(ignored_options, <<"test_key">>))
-			end},
+			% 	{ok, Value} = meta(<<"folder_path">>),
+			% 	?assertEqual(<<"group">>, Value)
+			% end},
+			% {"make_link/3 does not create links if keys are same", fun() ->
+			% 	ok = make_link([], <<"key1">>, <<"key1">>),
+			% 	?assertEqual(not_found, read(#{}, <<"key1">>))
+			% end},
+			% {"reset cleans up the database", fun() ->
+			% 	ok = write(ignored_options, <<"test_key">>, <<"test_value">>),
+
+			% 	ok = reset([]),
+			% 	?assertEqual(not_found, read(ignored_options, <<"test_key">>))
+			% end},
+			% {
+			% 	"resolve/2 returns the final key of the element (after following "
+			% 	"links)",
+			% 	fun() ->
+			% 		ok = write(#{}, <<"messages-real-key">>, <<"Data">>),
+			% 		ok = make_link(#{}, "real-key", "link-to"),
+
+			% 		?assertEqual("real-key", resolve(#{}, "link-to"))
+			% 	end
+			% },
 			{
-				"resolve/2 returns the final key of the element (after following "
-				"links)",
+				"resolve/2 resolutions for computed folder",
 				fun() ->
-					ok = write(#{}, <<"messages-real-key">>, <<"Data">>),
-					ok = make_link(#{}, "real-key", "link-to"),
+					% ├── computed
+					% │   └── 7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw
+					% │       ├── 76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc -> messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc
+					% │       ├── 8ZSzLqadFI0DyaUMEMvEcM9N5zkWqLU2lu7XhVejLGE -> messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc
+					% │       ├── LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE -> messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg
+					% │       ├── Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg -> messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg
+					% │       ├── slot
+					% │       │   ├── 0 -> messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg
+					% │       │   └── 1 -> messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc
+					% ├── messages
+					% │   ├── 76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc [raw]
+					% │   ├── 8ZSzLqadFI0DyaUMEMvEcM9N5zkWqLU2lu7XhVejLGE -> messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc
+					% │   ├── LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE -> messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg
+					% │   └── Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg [raw]
 
-					?assertEqual("real-key", resolve(#{}, "link-to"))
+					% Resolution examples:
+					% ["computed","7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", "LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE"] -> "messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg"
+					% ["computed","7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", ["slot", "1"]] -> "messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc"
+
+					% Create raw items in messages
+					write(#{}, <<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc/item">>, <<"Value">>),
+					write(#{}, <<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg/item">>, <<"Value">>),
+
+					% Create symbolic links in messages
+					make_link(
+						#{},
+						<<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>,
+						<<"messages/8ZSzLqadFI0DyaUMEMvEcM9N5zkWqLU2lu7XhVejLGE">>
+					),
+					make_link(
+						#{},
+						<<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>,
+						<<"messages/LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE">>
+					),
+
+					% Create subdirectory in computed
+					make_group(#{}, <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw">>),
+
+					% Create symbolic links in computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw
+					make_link(
+						#{},
+						<<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>,
+						<<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>
+					),
+					make_link(
+						#{},
+						<<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>,
+						<<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/8ZSzLqadFI0DyaUMEMvEcM9N5zkWqLU2lu7XhVejLGE">>
+					),
+					make_link(
+						#{},
+						<<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>,
+						<<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE">>
+					),
+					make_link(
+						#{},
+						<<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>,
+						<<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>
+					),
+
+					% Create subdirectory computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot
+					make_group(#{}, <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot">>),
+
+					% Create symbolic links in computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot
+					make_link(
+						#{},
+						<<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>,
+						<<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot/0">>
+					),
+					make_link(
+						#{},
+						<<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>,
+						<<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot/1">>
+					),
+
+					% Test
+					?assertEqual(
+						"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg",
+						resolve(#{}, [
+							"computed", "7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", "LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE"
+						])
+					),
+
+					?assertEqual(
+						"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc",
+						resolve(#{}, ["computed", "7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", ["slot", "1"]])
+					),
+
+					?assertEqual(
+						"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc",
+						resolve(#{}, ["computed", "7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", "slot", "1"])
+					)
 				end
-			}
+			},
+			{"Resolving interlinked item paths", fun() ->
+				% messages
+				% ├── csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc [raw]
+				% ├── -7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME
+				% │   ├── item
+				% │   └── level1_key -> messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo
+				% ├── UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo
+				% │   ├── item
+				% │   └── level2_key -> messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE
+				% └── FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE
+				% 	├── item
+				% 	└── level3_key -> messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc
+				%
+
+				% resolve("messages", "-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME", ["level1_key", "level2_key", "level3_key"])
+				%      -> "messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc"
+
+				% Create the raw item in messages
+				write(#{}, <<"messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc/item">>, <<"Value">>),
+
+				% Create the subdirectory under messages
+				make_group(#{}, <<"messages/-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME">>),
+
+				% Add item in the subdirectory
+				write(#{}, <<"messages/-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME/item">>, <<"Value">>),
+
+				% Create symbolic link to level1_key
+				make_link(
+					#{},
+					<<"messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo">>,
+					<<"messages/-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME/level1_key">>
+				),
+
+				% Create group for messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo
+				make_group(#{}, <<"messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo">>),
+
+				% Add item in messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo
+				write(#{}, <<"messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo/item">>, <<"Value">>),
+
+				% Create symbolic link to level2_key
+				make_link(
+					#{},
+					<<"messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE">>,
+					<<"messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo/level2_key">>
+				),
+
+				% Create group for messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE
+				make_group(#{}, <<"messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE">>),
+
+				% Add item in messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE
+				write(#{}, <<"messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE/item">>, <<"Value">>),
+
+				% Create symbolic link to level3_key
+				make_link(
+					#{},
+					<<"messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc">>,
+					<<"messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE/level3_key">>
+				),
+
+				?assertEqual(
+					"messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc",
+					resolve(#{}, [
+						"messages", "-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME", ["level1_key", "level2_key", "level3_key"]
+					])
+				)
+			end}
 		]}.
 
 -endif.

@@ -182,13 +182,11 @@ write(Store, Path, Item) when Item#tx.id == ?DEFAULT_ID ->
 write(Store, Path, Item) ->
 	case ar_bundles:type(Item) of
 		binary ->
-			?debugMsg("Simple write!!!"),
 			% The item is a raw binary. Write it into the store and make a
 			% link for the signed ID if it is different.
 			UnsignedID = ar_bundles:id(Item, unsigned),
 			SignedID = ar_bundles:id(Item, signed),
 			UnsignedPath = ao_store:path(Store, [Path, fmt_id(UnsignedID)]),
-			?debugFmt("[error] Writing following: ~p", [UnsignedPath]),
 			ok = ao_store:write(Store, UnsignedPath, ar_bundles:serialize(Item)),
 			if
 				SignedID =/= UnsignedID ->
@@ -216,14 +214,12 @@ write_composite(Store, Path, map, Item) ->
 		ao_store:path(Store, [Path, fmt_id(UnsignedHeaderID)]),
 		ao_store:path(Store, [Path, fmt_id(SignedHeaderID)])
 	),
-	?debugFmt("[writing] Item path is: ~p", [ao_store:path(Store, [Path, fmt_id(UnsignedHeaderID), "item"])]),
 	ok = ao_store:write(
 		Store,
 		ao_store:path(Store, [Path, fmt_id(UnsignedHeaderID), "item"]),
 		ar_bundles:serialize(Item#tx{data = #{<<"manifest">> => ar_bundles:manifest_item(Item)}})
 	),
 	% messages-OQu__uoqB4z9P7_2T5MLCd3BGBfyI0rzGcXU7wn0wsM-item
-	?debugFmt("Ao store write main item", []),
 
 	maps:map(
 		fun(Key, Subitem) ->
@@ -265,18 +261,18 @@ read_output(Store, ProcID, Input) ->
 			),
 			"messages"
 		),
-	% computed-MaL4cH2RhtNFI4xEKtFjV4_eULpDHQxLcHHKpF62Nt8-slot-1
-	logger:error("Resolved path: ~p", [ResolvedPath]),
 	?c({resolved_path, ResolvedPath}),
+	?debugFmt("[error][final] Read output resolved path: ~p", [
+		ao_store:resolve(
+			Store,
+			ao_store:path(Store, [?COMPUTE_CACHE_DIR, fmt_id(ProcID), Input])
+		)
+	]),
 	case ao_store:type(Store, ["messages", ResolvedPath]) of
 		not_found ->
-			?debugFmt("[error] [read_output] Read output got type: ~p", [
-				{not_found, ao_store:type(Store, ["messages", ResolvedPath])}
-			]),
 			?c(not_found),
 			not_found;
-		Type ->
-			?debugFmt("[error] [read_output] Read output got type: ~p", [Type]),
+		_Type ->
 			read(Store, ResolvedPath)
 	end.
 
@@ -312,30 +308,23 @@ lookup(Store, ID, Subpath, DirBase) ->
 			"messages"
 		),
 	?c({resolved_path, ResolvedPath}),
-	?debugFmt("ResolvedPath: ~p\n\n\n", [ResolvedPath]),
 	read(Store, ResolvedPath, DirBase, DirBase).
 
 -include_lib("eunit/include/eunit.hrl").
 read(Store, ID) ->
-	?debugMsg("Calling read"),
 	read(Store, ID, "messages").
 read(Store, ID, DirBase) ->
 	read(Store, ID, DirBase, all).
 read(Store, ID, DirBase, Subpath) ->
 	?c({reading_message, ID, DirBase, Subpath}),
-	?debugFmt("!!!Base dir, Subpath: basedir(~p) and subpath(~p)", [DirBase, Subpath]),
 	MessagePath = ao_store:path(Store, [DirBase, fmt_id(ID)]),
-	?debugFmt("Msg path: ~p", [MessagePath]),
-	?debugFmt("[read] identifies type via call to ao_store: ~p<|>~p", [MessagePath, ao_store:type(Store, MessagePath)]),
 	case ao_store:type(Store, MessagePath) of
 		composite ->
-			?debugFmt("Reading composite...?~p", [ao_store:type(Store, MessagePath)]),
 			case Subpath of
 				all ->
 					% The message is a bundle and we want the whole item.
 					% Read the root and reconstruct it.
 					RootPath = ao_store:path(Store, [MessagePath, "item"]),
-					?debugFmt("[read] composite -> Read simple message: ~p", [RootPath]),
 					Root = read_simple_message(Store, RootPath),
 					% The bundle is a map of its children by ID. Reconstruct
 					% the bundle by reading each child.
@@ -400,12 +389,6 @@ fmt_id(ID, _Type) ->
 
 %%% Tests
 
-%% Helpers
-test_cache() ->
-	ao_store:start(?TEST_STORE),
-	ao_store:reset(?TEST_STORE),
-	?TEST_STORE.
-
 create_unsigned_tx(Data) ->
 	ar_bundles:normalize(#tx{format = ans104, data = Data}).
 
@@ -413,51 +396,84 @@ create_unsigned_tx(Data) ->
 create_signed_tx(Data) ->
 	ar_bundles:sign_item(create_unsigned_tx(Data), ar_wallet:new()).
 
+-include_lib("eunit/include/eunit.hrl").
+
+create_store_test(Backend, Config) ->
+	TestStore = {Backend, Config},
+	T =
+		fun(Title) ->
+			NewTitle = Title ++ " [backend: ~p]",
+			TitleWithBackend = io_lib:format(NewTitle, [Backend]),
+			lists:flatten(TitleWithBackend)
+		end,
+	{
+		foreach,
+		fun() ->
+			ao_store:start(TestStore),
+			TestStore
+		end,
+		fun(Store) -> ao_store:reset(Store) end,
+		[
+			{T("simple_path_resolution_test"), fun() -> simple_path_resolution_test(TestStore) end},
+			{T("resursive_path_resolution_test"), fun() -> resursive_path_resolution_test(TestStore) end},
+			{T("hierarchical_path_resolution_test"), fun() -> hierarchical_path_resolution_test(TestStore) end},
+			{T("store_simple_unsigned_item_test"), fun() -> store_simple_unsigned_item_test(TestStore) end},
+			{T("simple_signed_item_test"), fun() -> simple_signed_item_test(TestStore) end},
+			{T("composite_unsigned_item_test"), fun() -> composite_unsigned_item_test(TestStore) end},
+			{T("composite_signed_item_test"), fun() -> composite_signed_item_test(TestStore) end},
+			{T("deeply_nested_item_test"), fun() -> deeply_nested_item_test(TestStore) end},
+			{T("write_and_read_output_test"), fun() -> write_and_read_output_test(TestStore) end}
+		]
+	}.
+
+rocksdb_store_test_() ->
+	create_store_test(ao_rocksdb_store, #{dir => "test-cache"}).
+
+fs_store_test_() ->
+	create_store_test(ao_fs_store, #{dir => "test-cache"}).
+
 %% Test path resolution dynamics.
-simple_path_resolution_test() ->
-	TestStore = test_cache(),
-	ao_store:start(TestStore),
-	ao_store:reset(?TEST_STORE),
+simple_path_resolution_test(TestStore) ->
 	ao_store:write(TestStore, <<"test-file">>, <<"test-data">>),
 	ao_store:make_link(TestStore, "test-file", "test-link"),
-	?assertEqual({ok, <<"test-data">>}, ao_store:read(TestStore, <<"test-link">>)).
+	?assertEqual(
+		{ok, <<"test-data">>},
+		ao_store:read(TestStore, <<"test-link">>)
+	).
 
-resursive_path_resolution_test() ->
-	ao_store:write(TestStore = test_cache(), "test-file", <<"test-data">>),
+resursive_path_resolution_test(TestStore) ->
+	ao_store:write(TestStore, "test-file", <<"test-data">>),
 	ao_store:make_link(TestStore, "test-file", "test-link"),
 	ao_store:make_link(TestStore, "test-link", "test-link2"),
-	?assertEqual({ok, <<"test-data">>}, ao_store:read(TestStore, "test-link2")).
+	?assertEqual(
+		{ok, <<"test-data">>},
+		ao_store:read(TestStore, "test-link2")
+	).
 
-% For now it's broken in rocksdb_store, as it supposed to write a file under a subfolder
-hierarchical_path_resolution_test() ->
-	TestStore = test_cache(),
+hierarchical_path_resolution_test(TestStore) ->
 	ao_store:make_group(TestStore, "test-dir1"),
 	ao_store:write(TestStore, ["test-dir1", "test-file"], <<"test-data">>),
 	ao_store:make_link(TestStore, ["test-dir1"], "test-link"),
-	% [
-	% 	{<<"test-dir1">>,<<"group">>},
-	%  	{<<"test-dir1/test-file">>,<<"raw">>},
-	%     {<<"test-link">>,<<"link">>}
-	% ] --> read(test-link, test-file)
-	?debugFmt("List all items: ~p\n", [ao_store:list(TestStore, <<"Path">>)]),
-	?assertEqual({ok, <<"test-data">>}, ao_store:read(TestStore, ["test-link", "test-file"])).
+	?assertEqual(
+		{ok, <<"test-data">>},
+		ao_store:read(TestStore, ["test-link", "test-file"])
+	).
 
 %% Test storing and retrieving a simple unsigned item
-store_simple_unsigned_item_test() ->
+store_simple_unsigned_item_test(TestStore) ->
 	Item = create_unsigned_tx(<<"Simple unsigned data item">>),
 	%% Write the simple unsigned item
-	ok = write(TestStore = test_cache(), Item),
-	?debugMsg("Write done"),
-	?debugFmt("List all items: ~p\n", [ao_store:list(TestStore, <<"Path">>)]),
+	ok = write(TestStore, Item),
+
 	%% Read the item back
 	RetrievedItem = read(TestStore, Item),
 	?assertEqual(Item, RetrievedItem).
 
 %% Test storing and retrieving a simple signed item
-simple_signed_item_test() ->
+simple_signed_item_test(TestStore) ->
 	Item = create_signed_tx(<<"Simple signed data item">>),
 	%% Write the simple signed item
-	ok = write(TestStore = test_cache(), Item),
+	ok = write(TestStore, Item),
 	%% Read the item back
 	RetrievedItemUnsigned = read(TestStore, ar_bundles:id(Item, unsigned)),
 	RetrievedItemSigned = read(TestStore, ar_bundles:id(Item, signed)),
@@ -467,17 +483,15 @@ simple_signed_item_test() ->
 	?assertEqual(true, ar_bundles:verify_item(RetrievedItemSigned)).
 
 %% Test storing and retrieving a composite unsigned item
-composite_unsigned_item_test() ->
+composite_unsigned_item_test(TestStore) ->
 	ItemData = #{
 		<<"key1">> => create_unsigned_tx(<<"value1">>),
 		<<"key2">> => create_unsigned_tx(<<"value2">>)
 	},
 	Item = ar_bundles:deserialize(create_unsigned_tx(ItemData)),
-	ok = write(TestStore = test_cache(), Item),
-	?debugMsg(">>> [error] WRITTEN   <<< \n\n"),
+	ok = write(TestStore, Item),
 	% This is a root item...
 	RetrievedItem = read(TestStore, Item#tx.id),
-	% ?debugFmt(S, As)
 	?assertEqual(
 		ar_bundles:id((maps:get(<<"key1">>, Item#tx.data)), unsigned),
 		ar_bundles:id((maps:get(<<"key1">>, RetrievedItem#tx.data)), unsigned)
@@ -492,13 +506,13 @@ composite_unsigned_item_test() ->
 	).
 
 %% Test storing and retrieving a composite signed item
-composite_signed_item_test() ->
+composite_signed_item_test(TestStore) ->
 	ItemData = #{
 		<<"key1">> => create_signed_tx(<<"value1">>),
 		<<"key2">> => create_signed_tx(<<"value2">>)
 	},
 	Item = ar_bundles:deserialize(create_signed_tx(ItemData)),
-	ok = write(TestStore = test_cache(), Item),
+	ok = write(TestStore, Item),
 
 	% RetrievedItem = read(TestStore, Item#tx.id),
 	RetrievedItem = read(TestStore, ar_bundles:id(Item, unsigned)),
@@ -516,39 +530,35 @@ composite_signed_item_test() ->
 	?assertEqual(true, ar_bundles:verify_item(RetrievedItem)).
 
 %% Test deeply nested item storage and retrieval
-deeply_nested_item_test() ->
+deeply_nested_item_test(TestStore) ->
 	%% Create nested data
 	DeepValueTx = create_signed_tx(<<"deep_value">>),
 	Level3Tx = create_unsigned_tx(#{<<"level3_key">> => DeepValueTx}),
 	Level2Tx = create_signed_tx(#{<<"level2_key">> => Level3Tx}),
 	Level1Tx = create_unsigned_tx(#{<<"level1_key">> => Level2Tx}),
 	%% Write the nested item
-	ok = write(TestStore = test_cache(), Level1Tx),
+	ok = write(TestStore, Level1Tx),
 	%% Read the deep value back using subpath
-	?debugMsg("\n\nWritten\n\n"),
-	?debugFmt("List: ~p", [ao_store:list(TestStore, <<"Path">>)]),
+
 	RetrievedItem = lookup(TestStore, Level1Tx#tx.id, ["level1_key", "level2_key", "level3_key"]),
 	?assertEqual(<<"deep_value">>, RetrievedItem#tx.data),
-	% %% Assert that the retrieved item matches the original deep value
+	%% Assert that the retrieved item matches the original deep value
 	?assertEqual(
 		ar_bundles:id(DeepValueTx, unsigned),
 		ar_bundles:id(RetrievedItem, unsigned)
 	).
 
-write_and_read_output_test() ->
-	Store = test_cache(),
+write_and_read_output_test(Store) ->
 	Proc = create_signed_tx(#{<<"test-item">> => create_unsigned_tx(<<"test-body-data">>)}),
 	Item1 = create_signed_tx(<<"Simple signed output #1">>),
 	Item2 = create_signed_tx(<<"Simple signed output #2">>),
 	ok = write_output(Store, Proc#tx.id, 0, Item1),
 	ok = write_output(Store, Proc#tx.id, 1, Item2),
-	?debugMsg("------- write done ---- \n"),
-	?debugFmt("All items: ~p", [ao_store:list(Store, "computed")]),
+
 	?assertEqual(Item1, read(Store, Item1#tx.id)),
 	?assertEqual(Item2, read(Store, Item2#tx.id)),
 
 	?assertEqual(Item1, read_output(Store, fmt_id(Proc#tx.id), Item1#tx.id)),
-	?debugFmt("Getting final item!!!\n\n", []),
 	?assertEqual(Item2, read_output(Store, fmt_id(Proc#tx.id), 1)).
 
 % latest_output_retrieval_test_broken() ->

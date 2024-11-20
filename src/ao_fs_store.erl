@@ -58,18 +58,18 @@ list(#{dir := DataDir}, Path) ->
 -include_lib("eunit/include/eunit.hrl").
 %% @doc Replace links in a path with the target of the link.
 resolve(Opts = #{dir := DataDir}, RawPath) ->
-	?debugFmt("Resolve: ~p", [RawPath]),
+	% ?debugFmt("Resolve: ~p", [RawPath]),
 	LinkedPathWithDataDir = resolve(Opts, "", filename:split(join(RawPath))),
 
 	NewPath = ar_util:remove_common(LinkedPathWithDataDir, DataDir),
-	?debugFmt("Resolve result: ~p", [NewPath]),
+	% ?debugFmt("Resolve result: ~p", [NewPath]),
 	NewPath.
 resolve(#{dir := DataDir}, CurrPath, []) ->
-	?debugFmt("Resolve: ~p", [CurrPath]),
-	?debugFmt("Resolve result: ~p", [join([DataDir, CurrPath])]),
+	% ?debugFmt("Resolve: ~p", [CurrPath]),
+	% ?debugFmt("Resolve result: ~p", [join([DataDir, CurrPath])]),
 	join([DataDir, CurrPath]);
 resolve(Opts = #{dir := DataDir}, CurrPath, [Next | Rest]) ->
-	?debugFmt("Resolve: ~p", [{CurrPath, Next, Rest}]),
+	% ?debugFmt("Resolve: ~p", [{CurrPath, Next, Rest}]),
 	PathPart = join([CurrPath, Next]),
 	case file:read_link(join([DataDir, PathPart])) of
 		{ok, Link} ->

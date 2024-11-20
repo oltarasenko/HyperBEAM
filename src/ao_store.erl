@@ -61,7 +61,7 @@ call_function([], _Function, _Args) ->
 call_function([{Mod, Opts} | Rest], Function, Args) ->
 	try apply(Mod, Function, [Opts | Args]) of
 		not_found ->
-			logger:error("Not found: ~p", [{Mod, Function, Opts, Args}]),
+			% logger:error("Not found: ~p", [{Mod, Function, Opts, Args}]),
 			call_function(Rest, Function, Args);
 		Result ->
 			Result
