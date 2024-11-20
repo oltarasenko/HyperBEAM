@@ -262,12 +262,6 @@ read_output(Store, ProcID, Input) ->
 			"messages"
 		),
 	?c({resolved_path, ResolvedPath}),
-	?debugFmt("[error][final] Read output resolved path: ~p", [
-		ao_store:resolve(
-			Store,
-			ao_store:path(Store, [?COMPUTE_CACHE_DIR, fmt_id(ProcID), Input])
-		)
-	]),
 	case ao_store:type(Store, ["messages", ResolvedPath]) of
 		not_found ->
 			?c(not_found),

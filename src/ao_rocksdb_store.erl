@@ -29,7 +29,10 @@
 % covered
 -export([reset/1]).
 % covered
+
+% doc
 -export([make_link/3]).
+% doc
 -export([make_group/2]).
 -export([type/2]).
 -export([add_path/3, path/2]).
@@ -41,8 +44,8 @@
 -export([handle_cast/2, handle_info/2, handle_call/3]).
 -export([code_change/3]).
 
--type key() :: binary().
--type value() :: binary().
+-type key() :: binary() | list().
+-type value() :: binary() | list().
 
 -spec start_link(#{dir := term()}) -> ignore | {ok, pid()}.
 start_link(#{dir := _Dir} = RocksDBOpts) ->
@@ -62,13 +65,19 @@ stop(_Opts) ->
 reset(_Opts) ->
 	gen_server:call(?MODULE, reset, ?TIMEOUT).
 
+%%------------------------------------------------------------------------------
+%% @doc Return path
+%%
+%% Recursively follows link messages
+%% @end
+%%------------------------------------------------------------------------------
 path(_Opts, Path) ->
 	Path.
 
 %%------------------------------------------------------------------------------
 %% @doc Read data by the key
 %%
-%% Recursively follows messages with values defined as <<"link-NewKey">>
+%% Recursively follows link messages
 %% @end
 %%------------------------------------------------------------------------------
 -spec read(Opts, Key) -> Result when
@@ -83,7 +92,6 @@ read(Opts, RawKey) ->
 				not_found ->
 					not_found;
 				ResolvedPath ->
-					% ?debugFmt("Read auto resolved: ~p", [ResolvedPath]),
 					gen_server:call(?MODULE, {read, join(ResolvedPath)}, ?TIMEOUT)
 			end;
 		_Result ->
@@ -97,20 +105,28 @@ read(Opts, RawKey) ->
 %%------------------------------------------------------------------------------
 -spec write(Opts, Key, Value) -> Result when
 	Opts :: map(),
-	Key :: key() | list(),
-	Value :: value() | list(),
+	Key :: key(),
+	Value :: value(),
 	Result :: ok | {error, any()}.
 write(_Opts, RawKey, Value) ->
 	Key = join(RawKey),
 	gen_server:call(?MODULE, {write, Key, Value}, ?TIMEOUT).
 
+%%------------------------------------------------------------------------------
+%% @doc Return meta information about the given Key
+%% @end
+%%------------------------------------------------------------------------------
+-spec meta(key()) -> {ok, binary()} | not_found.
 meta(Key) ->
 	gen_server:call(?MODULE, {meta, join(Key)}, ?TIMEOUT).
 
 %%------------------------------------------------------------------------------
 %% @doc List key/values stored in the storage so far.
 %%      *Note*: This function is slow, and probably should not be used on
-%%      production
+%%      production. Right now it's used for debugging purposes.
+%%
+%%      This can't work as it works for FS store, especially for large sets
+%%      of data.
 %% @end
 %%------------------------------------------------------------------------------
 -spec list(Opts, Path) -> Result when
@@ -118,7 +134,6 @@ meta(Key) ->
 	Path :: any(),
 	Result :: [{key(), value()}].
 list(_Opts, _Path) ->
-	% Lists all items under given path. Looks useful for composite items
 	Result = gen_server:call(?MODULE, list, ?TIMEOUT),
 	lists:map(
 		fun(Key) ->
@@ -127,8 +142,11 @@ list(_Opts, _Path) ->
 					{ok, <<"link">>} ->
 						{ok, Value} = read_no_follow(Key),
 						{<<"link">>, Value};
+					{ok, <<"group">>} ->
+						{ok, Value} = read_no_follow(Key),
+						{<<"group">>, Value};
 					{ok, Type} ->
-						Type
+						{Type, <<"raw data not extracted">>}
 				end,
 			{Key, Res}
 		end,
@@ -139,37 +157,37 @@ list(_Opts, _Path) ->
 -spec resolve(Opts, Path) -> Result when
 	Opts :: any(),
 	Path :: binary() | list(),
-	Result :: not_found | binary() | [binary() | list()].
+	Result :: not_found | string().
 resolve(_Opts, RawKey) ->
-	?debugFmt("Path ~p", [RawKey]),
 	Key = ao_fs_store:join(RawKey),
 	Path = filename:split(Key),
 
-	?debugFmt("Resolution result: ~p", [do_resolve("", Path)]),
 	case do_resolve("", Path) of
 		not_found -> not_found;
 		<<"">> -> "";
-		% converting back to list, so ao_cache can remove common
+		% converting back to list, so ao_cache can remove common prefix
 		BinResult -> binary_to_list(BinResult)
 	end.
 
+%%------------------------------------------------------------------------------
+%% @doc Helper function that is useful when it's required to get a direct data
+%%      under the given key, as it is, without following links
+%% @end
+%%------------------------------------------------------------------------------
 read_no_follow(Key) ->
-	% Maybe I don't need it, as it just does get no follow
 	gen_server:call(?MODULE, {read_no_follow, join(Key)}, ?TIMEOUT).
 
+%%------------------------------------------------------------------------------
+%% @doc Get type of the current item
+%% @end
+%%------------------------------------------------------------------------------
 -spec type(Opts, Key) -> Result when
 	Opts :: map(),
 	Key :: binary(),
 	Result :: composite | simple | not_found.
 
-type(_Opts, not_found) ->
-	not_found;
 type(_Opts, RawKey) ->
 	Key = join(RawKey),
-	% TODO: Rewrite doc!
-	% The fs adapter looks on the FS. If it's a directory it says 'comosite'
-	% composite item is an item which has manifest!
-	% ?debugFmt("[type] Identifying the type by key: ~p --> ~p", [Key, meta(Key)]),
 	case meta(Key) of
 		not_found ->
 			not_found;
@@ -184,7 +202,9 @@ type(_Opts, RawKey) ->
 	end.
 
 %%------------------------------------------------------------------------------
-%% @doc TODO WRite doc
+%% @doc Creates group under the given path
+%%      Creates an entry in the database and stored <<"group">> as a type in
+%%      the meta family.
 %% @end
 %%------------------------------------------------------------------------------
 make_group(_Opts, Path) ->
@@ -225,7 +245,6 @@ handle_info(_Info, State) ->
 	{noreply, State}.
 
 handle_call({write, Key, Value}, _From, State) ->
-	% ?debugFmt("[info][info] Writing the key ~p [info][info]", [Key]),
 	ok = write_meta(State, Key, <<"raw">>, #{}),
 	Result = write_data(State, Key, Value, #{}),
 	{reply, Result, State};
@@ -236,16 +255,15 @@ handle_call({make_group, Key}, _From, State) ->
 handle_call({make_link, Key1, Key2}, _From, State) ->
 	ok = write_meta(State, Key2, <<"link">>, #{}),
 	Result = write_data(State, Key2, Key1, #{}),
-
 	{reply, Result, State};
 handle_call({read, Key}, _From, DBInfo) ->
 	Result = get(DBInfo, Key, #{}),
 	{reply, Result, DBInfo};
-handle_call({meta, Key}, _From, State) ->
-	Result = get_meta(State, Key, #{}),
-	{reply, Result, State};
 handle_call({read_no_follow, BaseKey}, _From, State) ->
 	Result = get_data(State, BaseKey, #{}),
+	{reply, Result, State};
+handle_call({meta, Key}, _From, State) ->
+	Result = get_meta(State, Key, #{}),
 	{reply, Result, State};
 handle_call(reset, _From, #{db_handle := DBHandle, dir := Dir}) ->
 	ok = rocksdb:close(DBHandle),
@@ -295,6 +313,8 @@ write_data(DBInfo, Key, Value, Opts) ->
 	#{data_family := ColumnFamily, db_handle := Handle} = DBInfo,
 	rocksdb:put(Handle, ColumnFamily, Key, Value, Opts).
 
+% Note: this function is not yet optimized for tail recursion,
+% which might be needed if we expect big amount of nested links
 get(DBInfo, Key, Opts) ->
 	case get_data(DBInfo, Key, Opts) of
 		{ok, Value} ->
@@ -304,9 +324,6 @@ get(DBInfo, Key, Opts) ->
 					get(DBInfo, Value, Opts);
 				{ok, <<"raw">>} ->
 					{ok, Value};
-				{ok, <<"group">>} ->
-					% extract the group item
-					get(DBInfo, ao_fs_store:join([Key, <<"item">>]), Opts);
 				_OtherMeta ->
 					{ok, Value}
 			end;
@@ -315,13 +332,12 @@ get(DBInfo, Key, Opts) ->
 	end.
 
 collect(Iterator) ->
-	{ok, Key, Value} = rocksdb:iterator_move(Iterator, <<>>),
-	% collect(Iterator, [{Key, Value}]).
+	{ok, Key, _Value} = rocksdb:iterator_move(Iterator, <<>>),
 	collect(Iterator, [Key]).
 
 collect(Iterator, Acc) ->
 	case rocksdb:iterator_move(Iterator, next) of
-		{ok, Key, Value} ->
+		{ok, Key, _Value} ->
 			% Continue iterating, accumulating the key-value pair in the list
 			% collect(Iterator, [{Key, Value} | Acc]);
 			collect(Iterator, [Key | Acc]);
@@ -337,16 +353,9 @@ maybe_convert_to_binary(Value) when is_binary(Value) ->
 
 do_resolve(CurrPath, []) ->
 	CurrPath;
-% do_resolve(CurrPath, ["messages", Key | Rest]) ->
-% 	?debugFmt("~p", [list(#{}, <<"">>)]),
-% 	do_resolve(ao_fs_store:join([CurrPath, "messages", Key]), Rest);
-% do_resolve(CurrPath, ["computed", Key | Rest]) ->
-% 	?debugFmt("Trying to resolve: ~p", [{CurrPath, "computed", Key, Rest}]),
-% 	?debugFmt("~p", [list(#{}, <<"">>)]),
-% 	do_resolve(ao_fs_store:join([CurrPath, "computed", Key]), Rest);
 do_resolve(CurrPath, [LookupKey | Rest]) ->
 	LookupPath = ao_fs_store:join([CurrPath, LookupKey]),
-	?debugFmt("Current lookup path: ~p", [LookupPath]),
+	% ?debugFmt("Current lookup path: ~p", [LookupPath]),
 	NewCurrentPath =
 		case meta(LookupPath) of
 			{ok, <<"link">>} ->
@@ -388,42 +397,32 @@ join(Key) when is_list(Key) ->
 	maybe_convert_to_binary(KeyList);
 join(Key) when is_binary(Key) -> Key.
 
-% write_read_test_() ->
-%     {foreach,
-%         fun() ->
-%             Pid = get_or_start_server(),
-%             unlink(Pid)
-%         end,
-%         fun(_) -> ao_rocksdb_store:reset([]) end, [
-%             {"can read/write data", fun() ->
-%                 ok = write(#{}, <<"test_key">>, <<"test_value">>),
-%                 {ok, Value} = read(ignored_options, <<"test_key">>),
+write_read_test_() ->
+	{foreach,
+		fun() ->
+			Pid = get_or_start_server(),
+			unlink(Pid)
+		end,
+		fun(_) -> ao_rocksdb_store:reset([]) end, [
+			{"can read/write data", fun() ->
+				ok = write(#{}, <<"test_key">>, <<"test_value">>),
+				{ok, Value} = read(ignored_options, <<"test_key">>),
 
-%                 ?assertEqual(<<"test_value">>, Value)
-%             end},
-%             {"returns not_found for non existing keys", fun() ->
-%                 Value = read(#{}, <<"non_existing">>),
+				?assertEqual(<<"test_value">>, Value)
+			end},
+			{"returns not_found for non existing keys", fun() ->
+				Value = read(#{}, <<"non_existing">>),
 
-%                 ?assertEqual(not_found, Value)
-%             end},
-%             {"follows links", fun() ->
-%                 ok = write(#{}, <<"test_key2">>, <<"value_under_linked_key">>),
-%                 ok = make_link(#{}, <<"test_key2">>, <<"test_key">>),
-%                 {ok, Value} = read(#{}, <<"test_key">>),
+				?assertEqual(not_found, Value)
+			end},
+			{"follows links", fun() ->
+				ok = write(#{}, <<"test_key2">>, <<"value_under_linked_key">>),
+				ok = make_link(#{}, <<"test_key2">>, <<"test_key">>),
+				{ok, Value} = read(#{}, <<"test_key">>),
 
-%                 ?assertEqual(<<"value_under_linked_key">>, Value)
-%             end},
-%             {"automatically extracts composite items", fun() ->
-% 				% Composite items are supposed to be stored under a given group
-% 				ok = make_group(#{}, <<"test_key">>),
-% 				ok = write(#{}, <<"test_key/item">>, <<"item_data">>),
-
-% 				{ok, Value} = read(#{}, <<"test_key">>),
-%                 ?assertEqual(<<"item_data">>, Value)
-%             end}
-%         ]}.
-
--define(DEFAULT_VALUE, <<"Default">>).
+				?assertEqual(<<"value_under_linked_key">>, Value)
+			end}
+		]}.
 
 api_test_() ->
 	{foreach,
@@ -432,39 +431,56 @@ api_test_() ->
 			unlink(Pid)
 		end,
 		fun(_) -> reset([]) end, [
-			% {"make_link/3 creates a link to actual data", fun() ->
-			% 	ok = write(ignored_options, <<"key1">>, <<"test_value">>),
-			% 	ok = make_link([], <<"key1">>, <<"key2">>),
-			% 	{ok, Value} = read([], <<"key2">>),
+			{"make_link/3 creates a link to actual data", fun() ->
+				ok = write(ignored_options, <<"key1">>, <<"test_value">>),
+				ok = make_link([], <<"key1">>, <<"key2">>),
+				{ok, Value} = read([], <<"key2">>),
 
-			% 	?assertEqual(<<"test_value">>, Value)
-			% end},
-			% {"make_group/2 creates a group", fun() ->
-			% 	ok = make_group(#{}, <<"folder_path">>),
+				?assertEqual(<<"test_value">>, Value)
+			end},
+			{"make_group/2 creates a group", fun() ->
+				ok = make_group(#{}, <<"folder_path">>),
 
-			% 	{ok, Value} = meta(<<"folder_path">>),
-			% 	?assertEqual(<<"group">>, Value)
-			% end},
-			% {"make_link/3 does not create links if keys are same", fun() ->
-			% 	ok = make_link([], <<"key1">>, <<"key1">>),
-			% 	?assertEqual(not_found, read(#{}, <<"key1">>))
-			% end},
-			% {"reset cleans up the database", fun() ->
-			% 	ok = write(ignored_options, <<"test_key">>, <<"test_value">>),
+				{ok, Value} = meta(<<"folder_path">>),
+				?assertEqual(<<"group">>, Value)
+			end},
+			{"make_link/3 does not create links if keys are same", fun() ->
+				ok = make_link([], <<"key1">>, <<"key1">>),
+				?assertEqual(not_found, read(#{}, <<"key1">>))
+			end},
+			{"reset cleans up the database", fun() ->
+				ok = write(ignored_options, <<"test_key">>, <<"test_value">>),
 
-			% 	ok = reset([]),
-			% 	?assertEqual(not_found, read(ignored_options, <<"test_key">>))
-			% end},
-			% {
-			% 	"resolve/2 returns the final key of the element (after following "
-			% 	"links)",
-			% 	fun() ->
-			% 		ok = write(#{}, <<"messages-real-key">>, <<"Data">>),
-			% 		ok = make_link(#{}, "real-key", "link-to"),
-
-			% 		?assertEqual("real-key", resolve(#{}, "link-to"))
-			% 	end
-			% },
+				ok = reset([]),
+				?assertEqual(not_found, read(ignored_options, <<"test_key">>))
+			end},
+			{
+				"type/2 can identify simple items",
+				fun() ->
+					ok = write(#{}, <<"simple_item">>, <<"test">>),
+					?assertEqual(simple, type(#{}, <<"simple_item">>))
+				end
+			},
+			{
+				"type/2 returns not_found for non existing keys",
+				fun() ->
+					?assertEqual(not_found, type(#{}, <<"random_key">>))
+				end
+			},
+			{
+				"type/2 treats links as simple items",
+				fun() ->
+					make_link(#{}, <<"ExistingKey">>, <<"NewKey">>),
+					?assertEqual(simple, type(#{}, <<"NewKey">>))
+				end
+			},
+			{
+				"type/2 treats groups as composite items",
+				fun() ->
+					make_group(#{}, <<"messages_folder">>),
+					?assertEqual(composite, type(#{}, <<"messages_folder">>))
+				end
+			},
 			{
 				"resolve/2 resolutions for computed folder",
 				fun() ->
