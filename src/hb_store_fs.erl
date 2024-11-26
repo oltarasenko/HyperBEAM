@@ -3,6 +3,7 @@
 -export([start/1, stop/1, reset/1, scope/1]).
 -export([type/2, read/2, write/3, list/2]).
 -export([make_group/2, make_link/3, resolve/2]).
+
 -include_lib("kernel/include/file.hrl").
 -include("include/hb.hrl").
 
@@ -10,11 +11,11 @@
 %%% can be swapped out easily. The default implementation is a file-based
 %%% store.
 
-start(#{ prefix := DataDir }) ->
-    ok = filelib:ensure_dir(DataDir).
+start(#{prefix := DataDir}) ->
+	ok = filelib:ensure_dir(DataDir).
 
-stop(#{ prefix := _DataDir }) ->
-    ok.
+stop(#{prefix := _DataDir}) ->
+	ok.
 
 %% @doc The file-based store is always local, for now. In the future, we may
 %% want to allow that an FS store is shared across a cluster and thus remote.
@@ -52,7 +53,7 @@ list(Opts, Path) ->
 
 %% @doc Replace links in a path successively, returning the final path.
 %% Each element of the path is resolved in turn, with the result of each
-%% resolution becoming the prefix for the next resolution. This allows 
+%% resolution becoming the prefix for the next resolution. This allows
 %% paths to resolve across many links. For example, a structure as follows:
 %%
 %%    /a/b/c: "Not the right data"
@@ -98,7 +99,8 @@ make_group(#{ prefix := DataDir }, Path) ->
     ?event({making_group, P}),
     ok = filelib:ensure_dir(P).
 
-make_link(_, Link, Link) -> ok;
+make_link(_, Link, Link) ->
+	ok;
 make_link(Opts, Existing, New) ->
     ?event({symlink,
         add_prefix(Opts, Existing),

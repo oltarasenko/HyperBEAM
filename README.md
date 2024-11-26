@@ -2,12 +2,6 @@
 
 Soon.
 
-<!-- toc -->
-
--   [Development](#development)
-
-<!-- tocstop -->
-
 ## Development
 
 Environment Setup TBD
@@ -21,3 +15,14 @@ guidelines outlined in this document:
 -   All Markdown files should contain a Table of Contents
 
 Once you've install the top level tooling, each of these conventions are enforced, via git a commit hook, automatically.
+
+## Metrics (Grafana and Prometheus)
+
+In order to access the Grafana dashboard do the following:
+
+```
+cd ./metrics
+docker-compose up
+```
+
+Navigate to Grafana (localhost:3000) (use admin/admin username) and find the Beam dashboard there.
