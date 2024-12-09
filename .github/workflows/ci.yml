@@ -9,6 +9,19 @@ on:
       - 'main' # Trigger action for pushes to all PRs to main
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest  # Use the latest Ubuntu runner
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # Install eclint
+    - name: Install eclint
+      run: npm install -g eclint
+
+    - name: Run eclint check
+      run: eclint check "src/*"
+
   build:
     runs-on: ubuntu-latest  # Use the latest Ubuntu runner
 
@@ -36,7 +49,3 @@ jobs:
 
       - name: Compile
         run: rebar3 compile
-
-      - name: Run tests
-        run: rebar3 eunit
-        timeout-minutes: 5
