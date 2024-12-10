@@ -438,7 +438,7 @@ create_store_test(TestStore) ->
             % {T("composite_unsigned_item_test"), fun() -> composite_unsigned_item_test(TestStore) end},
             % {T("composite_signed_item_test"), fun() -> composite_signed_item_test(TestStore) end},
             {T("deeply_nested_item_test"), fun() -> deeply_nested_item_test(TestStore) end},
-            {T("write_and_read_output_test"), fun() -> write_and_read_output_test(TestStore) end},
+            {T("write_and_read_output_test"), {timeout, 10, fun() -> write_and_read_output_test(TestStore) end}},
             {T("latest_output_retrieval_test"), fun() -> latest_output_retrieval_test(TestStore) end}
         ]
     }.
