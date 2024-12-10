@@ -408,8 +408,18 @@ create_unsigned_tx(Data) ->
     ).
 
 %% Helper function to create signed #tx items.
-create_signed_tx(Data) ->
-    ar_bundles:sign_item(create_unsigned_tx(Data), ar_wallet:new()).
+create_signed_tx(Data) -> 
+    MaybeNewWallet = 
+        case persistent_term:get(pb_cache_test_wallet, undefined) of
+            undefined -> 
+                Wallet = ar_wallet:new(),
+                persistent_term:put(pb_cache_test_wallet, Wallet),
+                Wallet;
+            Wallet ->
+                Wallet
+        end,
+        ar_bundles:sign_item(create_unsigned_tx(Data), MaybeNewWallet).
+
 
 create_store_test(TestStore) ->
     Backend = element(1, TestStore),
@@ -422,6 +432,7 @@ create_store_test(TestStore) ->
     {
         foreach,
         fun() ->
+            
             case Backend of
                 hb_store_rocksdb -> hb_store_rocksdb:start_link([TestStore]);
                 _ -> hb_store:start([TestStore])
